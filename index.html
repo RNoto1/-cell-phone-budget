@@ -135,6 +135,12 @@ h1,h2,h3,h4{ font-family:var(--font-display); font-weight:800; letter-spacing:-.
 .menu-card.m-gas:hover{ border-color:var(--volt); box-shadow:0 0 0 1px rgba(194,255,61,.25),0 10px 40px -18px rgba(194,255,61,.7); }
 .menu-card.m-gas:hover .mi{ border-color:var(--volt); box-shadow:0 0 22px rgba(194,255,61,.25); }
 .menu-card.m-gas h2{ color:var(--volt); }
+.menu-card.m-backup:hover{ border-color:var(--amber); box-shadow:0 0 0 1px rgba(255,176,32,.25),0 10px 40px -18px rgba(255,176,32,.7); }
+.menu-card.m-backup:hover .mi{ border-color:var(--amber); box-shadow:0 0 22px rgba(255,176,32,.25); }
+.menu-card.m-backup h2{ color:var(--amber); }
+.card-meta{ font-family:var(--font-mono); font-size:11px; color:var(--dimmer); margin-top:7px;
+  padding-top:7px; border-top:1px solid var(--line); }
+.card-meta.stale{ color:var(--amber); }
 
 /* ─── app header ──────────────────────────────────────── */
 .app-header{
@@ -428,6 +434,11 @@ input::placeholder{ color:var(--dimmer); font-family:var(--font-body); font-weig
       <div class="menu-card m-gas" tabindex="0" role="button" onclick="go('screen-gas-select')" onkeydown="keyGo(event,'screen-gas-select')">
         <div class="mi">⛽</div>
         <div><h2>Gas Tracker</h2><p>MPG by station, head-to-head car comparison</p></div>
+      </div>
+      <div class="menu-card m-backup" tabindex="0" role="button" onclick="backupNow()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();backupNow();}">
+        <div class="mi">💾</div>
+        <div><h2>Backup</h2><p>Save everything to one file</p>
+          <div class="card-meta" id="backup-meta">Never backed up</div></div>
       </div>
     </div>
   </div>
@@ -731,6 +742,21 @@ input::placeholder{ color:var(--dimmer); font-family:var(--font-body); font-weig
   </div>
 </div>
 
+<div class="overlay" id="modal-backup">
+  <div class="sheet">
+    <div class="grab"></div>
+    <h2 id="backup-head">Backup saved</h2>
+    <p class="hint" style="margin:-8px 0 16px" id="backup-where"></p>
+    <div id="backup-contents" style="background:var(--panel-2);border:1px solid var(--line);border-radius:12px;padding:14px 16px;font-family:var(--font-mono);font-size:12.5px;line-height:2"></div>
+    <div class="data-col" style="margin-top:18px">
+      <button class="btn btn-block btn-volt" id="btn-share" onclick="shareBackup()">📤 Send it somewhere</button>
+      <button class="btn btn-block btn-ghost" onclick="document.getElementById('restore-file').click()">⬆ Restore from a file</button>
+      <input type="file" id="restore-file" accept="application/json" style="display:none" onchange="importAll(this)">
+    </div>
+    <div class="sheet-actions"><button class="btn btn-ghost" onclick="closeSheet('modal-backup')">Done</button></div>
+  </div>
+</div>
+
 <div id="zoom"><div id="zoom-car"></div></div>
 <div id="toast"></div>
 <div id="confetti"></div>
@@ -742,7 +768,7 @@ input::placeholder{ color:var(--dimmer); font-family:var(--font-body); font-weig
 const DEFAULT_CATS = ['Groceries','Gas','Out & About'];
 const CAT_COLORS = ['#45D2FF','#C2FF3D','#FFB020','#FF4D6D','#9B5DE5','#FF8A3D','#3DFFC2','#FF6FD8'];
 
-let state = { expenses:[], categories:[...DEFAULT_CATS], budgets:{}, recurring:[], vehicles:{'2022':[],'2014':[]} };
+let state = { expenses:[], categories:[...DEFAULT_CATS], budgets:{}, recurring:[], vehicles:{'2022':[],'2014':[]}, lastBackup:null };
 let selectedCategory = null;
 let currentVehicle = null;
 let dashCar = '2022';
@@ -898,6 +924,7 @@ function renderGlance(){
   odo('g-spend', '$' + Math.round(spend));
   odo('g-mpg', best ? best.toFixed(1) : '--');
   odo('g-fills', String(all.length));
+  renderBackupMeta();
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -1572,18 +1599,75 @@ function renderCompare(){
 }
 
 /* ══════════════ BACKUP ══════════════ */
-function exportAll(){
-  if(!state.expenses.length && !state.vehicles['2022'].length && !state.vehicles['2014'].length){
-    toast('Nothing to back up yet.','bad'); return;
-  }
-  const payload = { app:'richHub', version:2, exportedAt:new Date().toISOString(), data:state };
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type:'application/json' });
+let lastBackupFile = null;   // kept so the share sheet can re-send the same file
+
+function backupPayload(){
+  return { app:'richHub', version:2, exportedAt:new Date().toISOString(), data:state };
+}
+function backupNow(){
+  const f = [...state.vehicles['2022'], ...state.vehicles['2014']];
+  if(!state.expenses.length && !f.length){ toast('Nothing to back up yet.','bad'); return; }
+
+  const name = 'richs-hub-' + monthKey() + '.json';
+  const text = JSON.stringify(backupPayload(), null, 2);
+  lastBackupFile = { name, text };
+
+  // Save to the phone's Downloads folder
+  const blob = new Blob([text], { type:'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url; a.download = 'richs-hub-' + monthKey() + '.json';
-  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-  toast('Backup downloaded.','good');
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 4000);
+
+  state.lastBackup = new Date().toISOString();
+  saveState(); buzz(14); renderGlance();
+
+  // Confirm what was saved and where it went
+  const kb = Math.max(1, Math.round(text.length / 1024));
+  document.getElementById('backup-where').innerHTML =
+    'Saved as <b style="color:var(--volt)">' + name + '</b> in your Downloads folder.';
+  document.getElementById('backup-contents').innerHTML =
+    '<div>' + state.expenses.length + ' expense' + (state.expenses.length===1?'':'s') + '</div>' +
+    '<div>' + f.length + ' fill-up' + (f.length===1?'':'s') +
+      ' <span style="color:var(--dimmer)">(2022: ' + state.vehicles['2022'].length +
+      ' · 2014: ' + state.vehicles['2014'].length + ')</span></div>' +
+    '<div>' + Object.keys(state.budgets).length + ' budget limit' + (Object.keys(state.budgets).length===1?'':'s') +
+      ' · ' + state.recurring.length + ' recurring bill' + (state.recurring.length===1?'':'s') + '</div>' +
+    '<div style="color:var(--dimmer)">' + kb + ' KB</div>';
+
+  const shareBtn = document.getElementById('btn-share');
+  const canShare = !!(navigator.canShare && navigator.share);
+  shareBtn.classList.toggle('hide', !canShare);
+  document.getElementById('modal-backup').classList.add('active');
 }
+function shareBackup(){
+  if(!lastBackupFile){ toast('Tap Backup first.','bad'); return; }
+  try{
+    const file = new File([lastBackupFile.text], lastBackupFile.name, { type:'application/json' });
+    if(navigator.canShare && navigator.canShare({ files:[file] })){
+      navigator.share({ files:[file], title:"Rich's Hub backup" })
+        .then(()=>toast('Sent.','good'))
+        .catch(()=>{});
+    }else{
+      toast('Your browser can\u2019t share files — it\u2019s already in Downloads.','bad');
+    }
+  }catch(e){ toast('Sharing didn\u2019t work — the file is in Downloads.','bad'); }
+}
+function backupAge(){
+  if(!state.lastBackup) return null;
+  const days = Math.floor((Date.now() - new Date(state.lastBackup).getTime()) / 86400000);
+  return isNaN(days) ? null : days;
+}
+function renderBackupMeta(){
+  const el = document.getElementById('backup-meta'); if(!el) return;
+  const d = backupAge();
+  if(d === null){ el.textContent = 'Never backed up'; el.classList.add('stale'); return; }
+  el.textContent = 'Last backup: ' + (d === 0 ? 'today' : d === 1 ? 'yesterday' : d + ' days ago');
+  el.classList.toggle('stale', d >= 14);
+}
+/* kept for the buttons inside Recurring and the gas dashboard */
+function exportAll(){ backupNow(); }
 function importAll(input){
   const f = input.files[0]; if(!f) return;
   const r = new FileReader();
@@ -1599,13 +1683,13 @@ function importAll(input){
           state.recurring  = d.recurring  || [];
           state.vehicles   = d.vehicles   || {'2022':[],'2014':[]};
           ['2022','2014'].forEach(y => (state.vehicles[y]||[]).forEach(e => { if(!e.id) e.id = genId(); }));
-          saveState(); renderMoney(); renderGlance(); toast('Backup restored.','good');
+          saveState(); closeSheet('modal-backup'); renderMoney(); renderGlance(); toast('Backup restored.','good');
         });
       }else if(d['2022'] && d['2014']){
         askConfirm('Restore gas data from this backup?', 'Fill-up history will be replaced.', () => {
           state.vehicles = d;
           ['2022','2014'].forEach(y => state.vehicles[y].forEach(e => { if(!e.id) e.id = genId(); }));
-          saveState(); toast('Gas data restored.','good');
+          saveState(); closeSheet('modal-backup'); renderGlance(); toast('Gas data restored.','good');
         });
       }else{
         toast('That file isn\u2019t a Rich\u2019s Hub backup.','bad');
